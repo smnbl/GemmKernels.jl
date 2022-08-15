@@ -158,7 +158,7 @@ function matmul_pipelined(a, b, c, d,
             m = tile.base.M + tile.offset.M + tile.size.M
             n = tile.base.N + tile.offset.N + tile.size.N
 
-            if m <= size(c, 1) && n <= size(c, 2)
+        if m <= size(c, 1) && n <= size(c, 2)
                 x = Layout.load(conf.global_c_layout, c, tile)
                 x = transf_gl2sh_c(x, thread_tile)
                 Layout.store!(conf.shared_c_layout, shmem_c, x, thread_tile)
@@ -190,10 +190,10 @@ function matmul_pipelined(a, b, c, d,
                                   length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
     # Sizes of a_fragment and b_fragment
-    a_frag_i = (block_tile.size.M * block_tile.size.K) ÷ (conf.mem_a_warp.M * conf.mem_a_warp.K * conf.warps_per_block)
-    a_frag_j = (conf.mem_a_warp.M * conf.mem_a_warp.K) ÷ (conf.mem_a_thread.M * conf.mem_a_thread.K * 32)
-    b_frag_i = (block_tile.size.K * block_tile.size.N) ÷ (conf.mem_b_warp.K * conf.mem_b_warp.N * conf.warps_per_block)
-    b_frag_j = (conf.mem_b_warp.K * conf.mem_b_warp.N) ÷ (conf.mem_b_thread.K * conf.mem_b_thread.N * 32)
+    a_frag_i = cld((block_tile.size.M * block_tile.size.K), (conf.mem_a_warp.M * conf.mem_a_warp.K * conf.warps_per_block))
+    a_frag_j = cld((conf.mem_a_warp.M * conf.mem_a_warp.K), (conf.mem_a_thread.M * conf.mem_a_thread.K * 32))
+    b_frag_i = cld((block_tile.size.K * block_tile.size.N), (conf.mem_b_warp.K * conf.mem_b_warp.N * conf.warps_per_block))
+    b_frag_j = cld((conf.mem_b_warp.K * conf.mem_b_warp.N), (conf.mem_b_thread.K * conf.mem_b_thread.N * 32))
 
     a_fragment = MArray{Tuple{a_frag_i, a_frag_j}, Layout.fragtype(conf.global_a_layout, conf.mem_a_thread)}(undef)
     b_fragment = MArray{Tuple{b_frag_i, b_frag_j}, Layout.fragtype(conf.global_b_layout, conf.mem_b_thread)}(undef)
@@ -225,6 +225,7 @@ function matmul_pipelined(a, b, c, d,
             tile = translate_base(thread_tile, (K = 0, N = block_j))
             k = tile.base.K + tile.offset.K + tile.size.K
             n = tile.base.N + tile.offset.N + tile.size.N
+
 
             if k <= size(b, 1) && n <= size(b, 2)
                 @inbounds b_fragment[i, j] = Layout.load(conf.global_b_layout, b, tile)
@@ -272,8 +273,9 @@ function matmul_pipelined(a, b, c, d,
             m = tile.base.M + tile.offset.M + tile.size.M
             k = tile.base.K + tile.offset.K + tile.size.K
 
+
             if m <= size(a, 1) && k <= size(a, 2)
-                @inbounds a_fragment[i, j] = Layout.load(conf.global_a_layout, a, tile)
+                a_fragment[i, j] = Layout.load(conf.global_a_layout, a, tile)
             else
                 @inbounds a_fragment[i, j] = ntuple(_ -> Layout.eltype(conf.global_a_layout)(0), Val(tile.size.M * tile.size.K))
             end
@@ -286,8 +288,9 @@ function matmul_pipelined(a, b, c, d,
             k = tile.base.K + tile.offset.K + tile.size.K
             n = tile.base.N + tile.offset.N + tile.size.N
 
+
             if k <= size(b, 1) && n <= size(b, 2)
-                @inbounds b_fragment[i, j] = Layout.load(conf.global_b_layout, b, tile)
+                b_fragment[i, j] = Layout.load(conf.global_b_layout, b, tile)
             else
                 @inbounds b_fragment[i, j] = ntuple(_ -> Layout.eltype(conf.global_b_layout)(0), Val(tile.size.N * tile.size.K))
             end
@@ -327,6 +330,7 @@ function matmul_pipelined(a, b, c, d,
                             tile = translate_base(thread_tile, (M = block_i, K = block_k + 2 * block_tile.size.K))
                             m = tile.base.M + tile.offset.M + tile.size.M
                             k = tile.base.K + tile.offset.K + tile.size.K
+
 
                             if m <= size(a, 1) && k <= size(a, 2)
                                 @inbounds a_fragment[i, j] = Layout.load(conf.global_a_layout, a, tile)
