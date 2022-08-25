@@ -32,11 +32,12 @@ struct Config{
 
     #= Is A & B stored in Column major order? This determines the iteration order of the parallellisation =#
     IS_A_COL_MAJOR,
-    IS_B_COL_MAJOR
+    IS_B_COL_MAJOR,
+    IS_BROADCAST_C
    }
 end
 
-@inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
+@inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR, IS_BROADCAST_C}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR, IS_BROADCAST_C}
     if sym == :launch_args
         (threads = WARPS_PER_BLOCK * 32,
          blocks = (cld(MATMUL_SHAPE.M, BLOCK_SHAPE.M), cld(MATMUL_SHAPE.N, BLOCK_SHAPE.N)),
@@ -87,6 +88,8 @@ end
         IS_A_COL_MAJOR
     elseif sym == :is_b_col_major
         IS_B_COL_MAJOR
+    elseif sym == :is_broadcast_c
+        IS_BROADCAST_C
 
     # fallback
     else
@@ -129,6 +132,9 @@ function heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout
         nxt = next_K(cur...)
     end
 
+    @assert num_bytes_A(cur...) + num_bytes_B(cur...) <= 64 * 1024
+    @assert max(num_bytes_C(nxt...), num_bytes_D(nxt...)) <= 64 * 1024
+
     return (M = cur[1], N = cur[2], K = cur[3])
 end
 
@@ -148,6 +154,9 @@ end
 
 function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kwargs...)
     params = Dict(kwargs)
+
+    # c is 1 dimensional and needs broadcasting
+    is_broadcast_c = get(params, :is_broadcast_c, false)
 
     # Use some simple heuristics to get sensible defaults for parameters the user does not specify.
 
@@ -169,14 +178,16 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     block_shape = get(params, :block_shape,
         heuristic_block_shape(shared_a_layout, shared_b_layout, shared_c_layout, shared_d_layout))
 
-    println("block_shape: $block_shape")
-
     # 8 warps in a 4 x 2 arrangement usually works well
     # TODO: base this on the compute shape?
     warps_per_block = get(params, :warps_per_block, 8)
     op_shape = Operator.shape(operator)
     compute_warp = get(params, :compute_warp,
                        (M = cld(block_shape.M, 4), N = cld(block_shape.N, 2), K = op_shape.K))
+
+    # TODO: look at this issue again and figure out the correct values
+    # LocalArray size is limited < 32 elements?: this ensures that the fragment arrays don't exceed this value
+    compute_warp = (M = min(compute_warp.M, 8*op_shape.M), N = min(compute_warp.N, 4*op_shape.N), K = compute_warp.K)
 
     # Is the layout col-major or not? This is needed to find good values for mem_a_warp, mem_b_warp, etc.
     is_a_col_major = get(params, :is_a_col_major, true)
@@ -252,5 +263,6 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Is A & B Col Major? =#
         is_a_col_major,
         is_b_col_major,
+        is_broadcast_c,
     }
 end
