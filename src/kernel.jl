@@ -14,8 +14,8 @@ function matmul_singlestage(a, b, c, d,
                           epilogue,
                           ::Type{conf}) where {conf <: GemmKernels.Config}
     # Calculate the number of fragments needed to fully cover a warp tile
-    num_fragments_m = conf.compute_warp.M ÷ conf.compute_op_shape.M
-    num_fragments_n = conf.compute_warp.N ÷ conf.compute_op_shape.N
+    num_fragments_m = cld(conf.compute_warp.M, conf.compute_op_shape.M)
+    num_fragments_n = cld(conf.compute_warp.N, conf.compute_op_shape.N)
 
     # Constants
     block_i = (blockIdx().x - 1) * conf.block_shape.M
@@ -51,6 +51,8 @@ function matmul_singlestage(a, b, c, d,
                         x = Base.setindex(x, val, (i - 1) * tile.size[2] + j)
                     end
                 end
+
+                x = transf_gl2sh_c(x, thread_tile)
             else
                 x = ntuple(_ -> Layout.eltype(conf.shared_c_layout)(0), Val(tile.size.M * tile.size.N))
             end
